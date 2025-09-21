@@ -5,10 +5,12 @@ import java.lang.foreign.ValueLayout.*;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
+import java.lang.invoke.VarHandle;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
 
 /**
@@ -66,6 +68,9 @@ public interface FFI {
     interface Type<L extends MemoryLayout> extends FFI {
         /// memory layout of type, for delegate this method always throws.
         L layout();
+        default Field<L> asField(String name){
+            return new Field<>(name,this);
+        }
     }
 
     interface Reader<T> {
@@ -134,6 +139,29 @@ public interface FFI {
         }
     }
 
+    MemorySegment NULL = MemorySegment.NULL;
+    //region CType
+    Primitive<OfBoolean> C_BOOL = FFI.BOOL;
+    Primitive<OfByte> C_BYTE = FFI.INT8;
+    Primitive<OfByte> C_U_BYTE = FFI.INT8;
+    Primitive<OfByte> C_CHAR = FFI.INT8;
+    Primitive<OfByte> C_U_CHAR = FFI.INT8;
+    Primitive<OfShort> C_SHORT = FFI.INT16;
+    Primitive<OfShort> C_U_SHORT = FFI.INT16;
+    Primitive<OfInt> C_INT = FFI.INT32;
+    Primitive<OfInt> C_LONG = FFI.INT32;
+    Primitive<OfInt> C_U_LONG = FFI.INT32;
+    Primitive<OfInt> C_U_INT = FFI.INT32;
+    Primitive<OfLong> C_LONG_LONG = FFI.INT64;
+    Primitive<OfLong> C_U_LONG_LONG = FFI.INT64;
+    Primitive<OfFloat> C_FLOAT = FFI.FLOAT32;
+    Primitive<OfDouble> C_DOUBLE = FFI.FLOAT64;
+    Primitive<OfDouble> C_LONG_DOUBLE = FFI.FLOAT64;
+    Primitive<OfLong> C_SIZE_T = FFI.INT64;
+    Primitive<AddressLayout> C_POINTER = FFI.POINTER;
+    Primitive<AddressLayout> C_STRING = FFI.STRING;
+    //endregion
+    //region common type
     Primitive<OfBoolean> BOOL = new Primitive.entity<>(ValueLayout.JAVA_BOOLEAN, boolean.class);
     Primitive<OfByte> INT8 = new Primitive.entity<>(ValueLayout.JAVA_BYTE, byte.class);
     Primitive<OfShort> INT16 = new Primitive.entity<>(ValueLayout.JAVA_SHORT, short.class);
@@ -146,10 +174,11 @@ public interface FFI {
     Primitive<AddressLayout> POINTER = new Primitive.entity<>(
             ValueLayout.ADDRESS.withTargetLayout(
                     MemoryLayout.sequenceLayout(Long.MAX_VALUE, ValueLayout.JAVA_BYTE)), void.class);
-    Primitive<AddressLayout> CSTRING = new Primitive.entity<>(
+    Primitive<AddressLayout> STRING = new Primitive.entity<>(
             ValueLayout.ADDRESS.withTargetLayout(
                     MemoryLayout.sequenceLayout(Long.MAX_VALUE, ValueLayout.JAVA_BYTE)), String.class);
-
+    //endregion
+    /// array type
     sealed interface Array<L extends MemoryLayout, C extends Type<L>> extends Type<SequenceLayout> {
 
         C component();
@@ -158,6 +187,10 @@ public interface FFI {
 
         default SequenceLayout layout() {
             return layout(Long.MAX_VALUE);
+        }
+
+        default Field<SequenceLayout> asField(String name){
+            return new Field<>(name,this);
         }
 
         record entity<L extends MemoryLayout, C extends Type<L>>(C component) implements Array<L, C> {
@@ -208,8 +241,8 @@ public interface FFI {
             return ms.reinterpret(size).toArray(RUNE.layout());
         }
 
-        default String[] cstrings(MemorySegment ms, long size) {
-            assert component() == CSTRING : "not a CSTRING";
+        default String[] strings(MemorySegment ms, long size) {
+            assert component() == STRING : "not a STRING";
             return ms.reinterpret(size).elements(this.layout(size)).map(x -> x.getString(0)).toArray(String[]::new);
         }
 
@@ -220,6 +253,7 @@ public interface FFI {
         return new Array.entity<>(type);
     }
 
+    //region arrays
     //        Array<OfBoolean, Primitive<OfBoolean>> BOOL_ARRAY = new entity<>(Primitive.BOOL);
     Array<OfByte, Primitive<OfByte>> INT8_ARRAY = new Array.entity<>(INT8);
     Array<OfShort, Primitive<OfShort>> INT16_ARRAY = new Array.entity<>(INT16);
@@ -229,8 +263,10 @@ public interface FFI {
     Array<OfDouble, Primitive<OfDouble>> FLOAT64_ARRAY = new Array.entity<>(FLOAT64);
     Array<OfChar, Primitive<OfChar>> RUNE_ARRAY = new Array.entity<>(RUNE);
     Array<AddressLayout, Primitive<AddressLayout>> POINTER_ARRAY = new Array.entity<>(POINTER);
-    Array<AddressLayout, Primitive<AddressLayout>> CSTRING_ARRAY = new Array.entity<>(CSTRING);
+    Array<AddressLayout, Primitive<AddressLayout>> STRING_ARRAY = new Array.entity<>(STRING);
+    //endregion
 
+    /// field hold a field name and type, if type is padding,name should be null
     record Field<L extends MemoryLayout>(String name, Type<L> type) {
         public MemoryLayout layout() {
             return name == null || name.isEmpty()
@@ -243,8 +279,18 @@ public interface FFI {
         }
     }
 
+    /// padding type
     sealed interface Padding extends Type<PaddingLayout> {
         long bytes();
+
+        default Field<PaddingLayout> asField() {
+            return new Field<>(null, this);
+        }
+
+        @Override
+        default Field<PaddingLayout> asField(String name) {
+            return new Field<>(null, this);
+        }
 
         record entity(long bytes) implements Padding {
 
@@ -253,23 +299,60 @@ public interface FFI {
                 return MemoryLayout.paddingLayout(bytes);
             }
         }
+
+    }
+
+    /// change memory layout align
+    static MemoryLayout align(MemoryLayout layout, long align) {
+        return switch (layout) {
+            case PaddingLayout p -> p;
+            case ValueLayout v -> v.withByteAlignment(align);
+            case GroupLayout g -> {
+                var alignedMembers = g.memberLayouts()
+                                      .stream()
+                                      .map(m -> align(m, align))
+                                      .toArray(MemoryLayout[]::new);
+                yield g instanceof StructLayout ?
+                        MemoryLayout.structLayout(alignedMembers)
+                        : MemoryLayout.unionLayout(alignedMembers);
+            }
+            case SequenceLayout s -> MemoryLayout.sequenceLayout(s.elementCount(), align(s.elementLayout(), align));
+        };
+    }
+
+    /// create a padding with size
+    static Padding padding(long bytes) {
+        return new Padding.entity(bytes);
     }
 
     sealed interface Structural<T> extends Type<GroupLayout> {
         @Override
         GroupLayout layout();
 
+        /// accessor for each field.
+        Map<String, VarHandle> accessor();
+
         sealed interface Struct<T> extends Structural<T> {
+            /// @param ms the segment to read from
+            /// @return value
             T read(MemorySegment ms);
 
+            /// @param ms    the segment to write to
+            /// @param value the value
+            /// @return ms
             MemorySegment write(MemorySegment ms, T value);
         }
 
         sealed interface WriteOnly<T> extends Structural<T> {
+            /// @param ms    the segment to write to
+            /// @param value the value
+            /// @return ms
             MemorySegment write(MemorySegment ms, T value);
         }
 
         sealed interface ReadOnly<T> extends Structural<T> {
+            /// @param ms the segment to read from
+            /// @return value
             T read(MemorySegment ms);
         }
 
@@ -297,22 +380,30 @@ public interface FFI {
                 assert writer != null : "have no writer";
                 return writer.apply(ms, value);
             }
+
+            @Override
+            public Map<String, VarHandle> accessor() {
+                return Arrays.stream(fields).sequential()
+                             .filter(x -> x.name != null && !x.name.isEmpty())
+                             .collect(Collectors.toMap(v -> v.name, v -> v.layout().varHandle(
+                                     MemoryLayout.PathElement.groupElement(v.name))));
+            }
         }
 
         Field<?>[] fields();
     }
 
-    /// a read-write binding struct
+    /// create read-write binding struct
     static <T> Structural.Struct<T> struct(Reader<T> reader, Writer<T> writer, Field<?>... fields) {
         return new Structural.entity<>(fields, reader, writer);
     }
 
-    /// a read-only binding struct
+    /// create  read-only binding struct
     static <T> Structural.ReadOnly<T> struct(Reader<T> reader, Field<?>... fields) {
         return new Structural.entity<>(fields, reader, null);
     }
 
-    /// a write-only binding struct
+    /// create a write-only binding struct
     static <T> Structural.WriteOnly<T> struct(Writer<T> writer, Field<?>... fields) {
         return new Structural.entity<>(fields, null, writer);
     }
@@ -337,16 +428,19 @@ public interface FFI {
         Field<?>[] options();
     }
 
+    /// create a Union type
     static Union union(Field<?>... fields) {
         return new Union.entity(fields);
     }
 
+    /// a Foreign Function or a Native (JVM) function stub.
+    /// variadic FF should use {@link  #linkVarArgs(Linker, SymbolLookup, String, Type[])}.
     sealed interface Delegate extends FFI {
-
+        /// The descriptor
         FunctionDescriptor descriptor();
 
-
-        default MemorySegment bind(Arena arena, Linker linker, MethodHandles.Lookup lookup,
+        /// build  instance method stub
+        default MemorySegment stub(Arena arena, Linker linker, MethodHandles.Lookup lookup,
                                    Object value,
                                    String name,
                                    MethodType methodType
@@ -355,13 +449,19 @@ public interface FFI {
             return linker.upcallStub(mh, descriptor(), arena);
         }
 
-        default MemorySegment bind(Arena arena, Linker linker, MethodHandles.Lookup lookup, Object value, String name,
+        /// build  instance method stub
+        ///
+        /// @see #stub(Arena, Linker, MethodHandles.Lookup, Object, String, MethodType)
+        default MemorySegment stub(Arena arena, Linker linker, MethodHandles.Lookup lookup,
+                                   Object value,
+                                   String name,
                                    Class<?> returns,
                                    Class<?>... arguments) throws NoSuchMethodException, IllegalAccessException {
-            return bind(arena, linker, lookup, value, name, MethodType.methodType(returns, arguments));
+            return stub(arena, linker, lookup, value, name, MethodType.methodType(returns, arguments));
         }
 
-        default MemorySegment bindStatic(Arena arena, Linker linker,
+        /// build static method stub
+        default MemorySegment stubStatic(Arena arena, Linker linker,
                                          MethodHandles.Lookup lookup,
                                          Class<?> holder, String name,
                                          MethodType methodType) throws NoSuchMethodException, IllegalAccessException {
@@ -369,33 +469,44 @@ public interface FFI {
             return linker.upcallStub(mh, descriptor(), arena);
         }
 
-
-        default MemorySegment bindStatic(Arena arena, Linker linker,
+        /// @see #stubStatic(Arena, Linker, MethodHandles.Lookup, Class, String, MethodType)
+        default MemorySegment stubStatic(Arena arena, Linker linker,
                                          MethodHandles.Lookup lookup,
                                          Class<?> holder, String name,
                                          Class<?> returns, Class<?>... arguments) throws NoSuchMethodException,
                 IllegalAccessException {
-            return bindStatic(arena, linker, lookup, holder, name, MethodType.methodType(returns, arguments));
+            return stubStatic(arena, linker, lookup, holder, name, MethodType.methodType(returns, arguments));
         }
 
-
-        default MemorySegment bindConstructor(Arena arena, Linker linker, MethodHandles.Lookup lookup,
+        /// @see #stubConstructor(Arena, Linker, MethodHandles.Lookup, Class, MethodType)
+        default MemorySegment stubConstructor(Arena arena, Linker linker, MethodHandles.Lookup lookup,
                                               Class<?> type, Class<?>... arguments) throws NoSuchMethodException,
                 IllegalAccessException {
-            return bindConstructor(arena, linker, lookup, type, MethodType.methodType(type, arguments));
+            return stubConstructor(arena, linker, lookup, type, MethodType.methodType(type, arguments));
         }
 
-        default MemorySegment bindConstructor(Arena arena, Linker linker, MethodHandles.Lookup lookup,
+        /// build constructor stub
+        default MemorySegment stubConstructor(Arena arena, Linker linker, MethodHandles.Lookup lookup,
                                               Class<?> holder, MethodType methodType) throws NoSuchMethodException,
                 IllegalAccessException {
             var mh = lookup.findConstructor(holder, methodType);
             return linker.upcallStub(mh, descriptor(), arena);
         }
 
-
-        default MethodHandle lookup(Linker linker, SymbolLookup lookup, String name) {
+        /// link to foreign function
+        default MethodHandle link(Linker linker, SymbolLookup lookup, String name) {
             var addr = lookup.findOrThrow(name);
             return linker.downcallHandle(addr, descriptor());
+        }
+
+        /// link to foreign function
+        default MethodHandle linkVarArgs(Linker linker, SymbolLookup lookup, String name, Type<?>... variadic) {
+            var base = descriptor();
+            var desc = descriptor().appendArgumentLayouts(
+                    Arrays.stream(variadic).map(Type::layout).toArray(MemoryLayout[]::new));
+            var opt = Linker.Option.firstVariadicArg(base.argumentLayouts().size());
+            var addr = lookup.findOrThrow(name);
+            return linker.downcallHandle(addr, desc, opt).asSpreader(Object[].class, variadic.length);
         }
 
         record entity(Type<?> returns, Type<?>[] arguments) implements Delegate {
@@ -410,16 +521,214 @@ public interface FFI {
             }
         }
 
+        /// @return function return type may null for void returns
         Type<?> returns();
 
+        /// @return function arguments, empty for no arguments. variadic arguments check {@link #linkVarArgs(Linker, SymbolLookup, String, Type[])}
         Type<?>[] arguments();
     }
 
+    /// create a {@link Delegate}
     static Delegate delegate(Type<?> retType, Type<?>... argument) {
         return new Delegate.entity(retType, argument);
     }
 
+    /// create a {@link Delegate} that return nothing
     static Delegate delegateVoid(Type<?>... argument) {
         return new Delegate.entity(null, argument);
+    }
+
+    /// @param ms a memory hold value `*Value`
+    /// @return an address hold the memory location, `**Value`
+    static MemorySegment reference(SegmentAllocator arena, MemorySegment ms) {
+        return arena.allocateFrom(ValueLayout.ADDRESS, ms);
+    }
+
+    /// @param ms an address hold the memory location, `**Value`
+    /// @return an memory hold value `*Value`
+    static MemorySegment dereference(MemorySegment ms) {
+        return ms.get(ValueLayout.ADDRESS, 0);
+    }
+
+    /// referenced memory
+    sealed interface Reference {
+        sealed interface RefStruct<T> extends Reference {
+            T get();
+
+            RefStruct<T> set(T val);
+
+            record entity<T>(MemorySegment memory, Structural.Struct<T> struct) implements RefStruct<T> {
+                @Override
+                public MemoryLayout valueLayout() {
+                    return struct.layout();
+                }
+
+                @Override
+                public T get() {
+                    return struct.read(memory);
+                }
+
+                @Override
+                public RefStruct<T> set(T val) {
+                    struct.write(memory, val);
+                    return this;
+                }
+            }
+        }
+
+        static <T> RefStruct<T> struct(Arena arena, Structural.Struct<T> type) {
+            return new RefStruct.entity<>(arena.allocate(type.layout().byteSize()), type);
+        }
+
+        MemoryLayout valueLayout();
+
+        default MemoryLayout layout() {
+            return POINTER.layout().withTargetLayout(valueLayout());
+        }
+
+        /// the memory that holding the value
+        MemorySegment memory();
+
+        static Int8 int8(Arena arena) {
+            return new Int8.entity(arena.allocate(1));
+        }
+
+        sealed interface Int8 extends Reference {
+            @Override
+            default MemoryLayout valueLayout() {
+                return ValueLayout.JAVA_BYTE;
+            }
+
+            default byte value() {
+                return memory().get(ValueLayout.JAVA_BYTE, 0);
+            }
+
+            default Int8 value(byte value) {
+                var addr = memory();
+                addr.set(ValueLayout.JAVA_BYTE, 0, value);
+                return this;
+            }
+
+            record entity(MemorySegment memory) implements Int8 {}
+        }
+
+        static Int16 int16(Arena arena) {
+            return new Int16.entity(arena.allocate(2));
+        }
+
+        sealed interface Int16 extends Reference {
+            @Override
+            default MemoryLayout valueLayout() {
+                return ValueLayout.JAVA_SHORT;
+            }
+
+            default short value() {
+                return memory().get(ValueLayout.JAVA_SHORT, 0);
+            }
+
+            default Int16 value(short value) {
+                var addr = memory();
+                addr.set(ValueLayout.JAVA_SHORT, 0, value);
+                return this;
+            }
+
+            record entity(MemorySegment memory) implements Int16 {}
+        }
+
+        static Int32 int32(Arena arena) {
+            return new Int32.entity(arena.allocate(4));
+        }
+
+        sealed interface Int32 extends Reference {
+            @Override
+            default MemoryLayout valueLayout() {
+                return ValueLayout.JAVA_INT;
+            }
+
+            default int value() {
+                return memory().get(ValueLayout.JAVA_INT, 0);
+            }
+
+            default Int32 value(int value) {
+                var addr = memory();
+                addr.set(ValueLayout.JAVA_INT, 0, value);
+                return this;
+            }
+
+
+            record entity(MemorySegment memory) implements Int32 {}
+        }
+
+        static Int64 int64(Arena arena) {
+            return new Int64.entity(arena.allocate(8));
+        }
+
+        sealed interface Int64 extends Reference {
+            @Override
+            default MemoryLayout valueLayout() {
+                return ValueLayout.JAVA_LONG;
+            }
+
+            default long value() {
+                return memory().get(ValueLayout.JAVA_LONG, 0);
+            }
+
+            default Int64 value(long value) {
+                var addr = memory();
+                addr.set(ValueLayout.JAVA_LONG, 0, value);
+                return this;
+            }
+
+
+            record entity(MemorySegment memory) implements Int64 {}
+        }
+
+        static Float32 float32(Arena arena) {
+            return new Float32.entity(arena.allocate(4));
+        }
+
+        sealed interface Float32 extends Reference {
+            @Override
+            default MemoryLayout valueLayout() {
+                return ValueLayout.JAVA_FLOAT;
+            }
+
+            default float value() {
+                return memory().get(ValueLayout.JAVA_FLOAT, 0);
+            }
+
+            default Float32 value(float value) {
+                var addr = memory();
+                addr.set(ValueLayout.JAVA_FLOAT, 0, value);
+                return this;
+            }
+
+
+            record entity(MemorySegment memory) implements Float32 {}
+        }
+
+        static Float64 float64(Arena arena) {
+            return new Float64.entity(arena.allocate(8));
+        }
+
+        sealed interface Float64 extends Reference {
+            @Override
+            default MemoryLayout valueLayout() {
+                return ValueLayout.JAVA_DOUBLE;
+            }
+
+            default double value() {
+                return memory().get(ValueLayout.JAVA_DOUBLE, 0);
+            }
+
+            default Float64 value(double value) {
+                var addr = memory();
+                addr.set(ValueLayout.JAVA_DOUBLE, 0, value);
+                return this;
+            }
+
+
+            record entity(MemorySegment memory) implements Float64 {}
+        }
     }
 }
