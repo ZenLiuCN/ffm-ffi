@@ -13,6 +13,6 @@
 
     </properties>
     <artifactId>ffm-ffi-api</artifactId>
-
-
+    <name>ffm-ffi-api</name>
+    <description>FFM based ffi util for java 25+</description>
 </project>
