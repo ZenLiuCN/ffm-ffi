@@ -1,7 +1,5 @@
 package ffm.ffi.api;
 
-import lombok.SneakyThrows;
-
 import java.lang.foreign.*;
 import java.lang.foreign.ValueLayout.*;
 import java.lang.invoke.MethodHandle;
@@ -347,50 +345,54 @@ public interface FFI {
 
         FunctionDescriptor descriptor();
 
-        @SneakyThrows
+
         default MemorySegment bind(Arena arena, Linker linker, MethodHandles.Lookup lookup,
                                    Object value,
                                    String name,
                                    MethodType methodType
-                                   ) {
+                                  ) throws NoSuchMethodException, IllegalAccessException {
             var mh = lookup.bind(value, name, methodType);
             return linker.upcallStub(mh, descriptor(), arena);
         }
-        @SneakyThrows
-        default MemorySegment bind(Arena arena, Linker linker,MethodHandles.Lookup lookup,  Object value, String name, Class<?> returns,
-                                   Class<?>... arguments) {
-            return bind(arena,linker,lookup,value,name,MethodType.methodType(returns, arguments));
+
+        default MemorySegment bind(Arena arena, Linker linker, MethodHandles.Lookup lookup, Object value, String name,
+                                   Class<?> returns,
+                                   Class<?>... arguments) throws NoSuchMethodException, IllegalAccessException {
+            return bind(arena, linker, lookup, value, name, MethodType.methodType(returns, arguments));
         }
-        @SneakyThrows
+
         default MemorySegment bindStatic(Arena arena, Linker linker,
                                          MethodHandles.Lookup lookup,
                                          Class<?> holder, String name,
-                                         MethodType methodType) {
+                                         MethodType methodType) throws NoSuchMethodException, IllegalAccessException {
             var mh = lookup.findStatic(holder, name, methodType);
             return linker.upcallStub(mh, descriptor(), arena);
         }
 
-        @SneakyThrows
+
         default MemorySegment bindStatic(Arena arena, Linker linker,
                                          MethodHandles.Lookup lookup,
                                          Class<?> holder, String name,
-                                         Class<?> returns, Class<?>... arguments) {
+                                         Class<?> returns, Class<?>... arguments) throws NoSuchMethodException,
+                IllegalAccessException {
             return bindStatic(arena, linker, lookup, holder, name, MethodType.methodType(returns, arguments));
         }
 
-        @SneakyThrows
+
         default MemorySegment bindConstructor(Arena arena, Linker linker, MethodHandles.Lookup lookup,
-                                              Class<?> type,Class<?>... arguments) {
-            return bindConstructor(arena,linker,lookup, type,MethodType.methodType(type, arguments));
+                                              Class<?> type, Class<?>... arguments) throws NoSuchMethodException,
+                IllegalAccessException {
+            return bindConstructor(arena, linker, lookup, type, MethodType.methodType(type, arguments));
         }
-        @SneakyThrows
+
         default MemorySegment bindConstructor(Arena arena, Linker linker, MethodHandles.Lookup lookup,
-                                              Class<?> holder,MethodType methodType) {
-            var mh = lookup.findConstructor(holder,methodType);
+                                              Class<?> holder, MethodType methodType) throws NoSuchMethodException,
+                IllegalAccessException {
+            var mh = lookup.findConstructor(holder, methodType);
             return linker.upcallStub(mh, descriptor(), arena);
         }
 
-        @SneakyThrows
+
         default MethodHandle lookup(Linker linker, SymbolLookup lookup, String name) {
             var addr = lookup.findOrThrow(name);
             return linker.downcallHandle(addr, descriptor());
