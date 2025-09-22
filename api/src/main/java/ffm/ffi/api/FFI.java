@@ -9,9 +9,9 @@ import java.lang.invoke.VarHandle;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
-
 
 /**
  * Basic FFI via FFM helpers.
@@ -68,8 +68,9 @@ public interface FFI {
     interface Type<L extends MemoryLayout> extends FFI {
         /// memory layout of type, for delegate this method always throws.
         L layout();
-        default Field<L> asField(String name){
-            return new Field<>(name,this);
+
+        default Field<L> asField(String name) {
+            return new Field<>(name, this);
         }
     }
 
@@ -137,6 +138,268 @@ public interface FFI {
         record entity<L extends MemoryLayout>(L layout, Class<?> binding) implements Primitive<L> {
 
         }
+
+        record pointer<T extends MemoryLayout>(AddressLayout layout, T target, long size, Class<?> binding) implements
+                                                                                                            Primitive<AddressLayout> {
+            public static <L extends MemoryLayout> pointer<SequenceLayout> array(L v, long size) {
+                var t = MemoryLayout.sequenceLayout(size, v);
+                return new pointer<>(AddressLayout.ADDRESS.withTargetLayout(t), t, size, Void.class);
+            }
+
+            public pointer(T target) {
+
+                this(
+                        AddressLayout.ADDRESS.withTargetLayout(target),
+                        target,
+                        1, Void.class);
+            }
+
+            public <L extends MemoryLayout> pointer<L> target(L v) {
+                return new pointer<>(layout.withTargetLayout(v), v, 1, binding);
+            }
+
+            public <L extends MemoryLayout> pointer<SequenceLayout> target(L v, long size) {
+                var t = MemoryLayout.sequenceLayout(size, v);
+                return new pointer<>(layout.withTargetLayout(t), t, size, binding);
+            }
+
+        }
+    }
+
+    sealed interface Pointer extends Type<AddressLayout> {
+        MemoryLayout target();
+
+        sealed abstract class Base<ML extends MemoryLayout> implements Pointer {
+            public final AddressLayout layout;
+            public final ML target;
+
+            @Override
+            public boolean equals(Object o) {
+                if (!(o instanceof Base<?> base)) return false;
+                return Objects.equals(layout, base.layout) && Objects.equals(target, base.target);
+            }
+
+            @Override
+            public int hashCode() {
+                return Objects.hash(layout, target);
+            }
+
+            public ML target() {
+                return target;
+            }
+
+            public AddressLayout layout() {
+                return layout;
+            }
+
+            protected Base(ML target) {
+                this.layout = ValueLayout.ADDRESS.withTargetLayout(target);
+                this.target = target;
+            }
+
+            protected MemorySegment value(MemorySegment ms) {
+                return ms.get(layout, 0);
+            }
+        }
+
+        static <T> Struct<T> of(long byteSize, Reader<T> reader, Writer<T> writer) {
+            return new Struct<>(byteSize, reader, writer);
+        }
+
+        final class Struct<T> extends Base<MemoryLayout> {
+            final Reader<T> reader;
+            final Writer<T> writer;
+
+            public Struct(long byteSize, Reader<T> reader, Writer<T> writer) {
+                super(MemoryLayout.sequenceLayout(byteSize, ValueLayout.JAVA_BYTE));
+                this.reader = reader;
+                this.writer = writer;
+            }
+
+            public T get(MemorySegment ms) {
+                return reader.apply(ms);
+            }
+
+            public MemorySegment set(MemorySegment ms, T value) {
+                return writer.apply(ms, value);
+            }
+
+            @Override
+            public boolean equals(Object o) {
+                if (!(o instanceof Struct<?> struct)) return false;
+                if (!super.equals(o)) return false;
+                return Objects.equals(reader, struct.reader) && Objects.equals(writer, struct.writer);
+            }
+
+            @Override
+            public int hashCode() {
+                return Objects.hash(super.hashCode(), reader, writer);
+            }
+        }
+
+        Int8 Int8 = new Int8();
+
+        final class Int8 extends Base<ValueLayout.OfByte> {
+            public Int8() {
+                super(ValueLayout.JAVA_BYTE);
+            }
+
+            public byte get(MemorySegment m) {
+                return value(m).get(target, 0);
+            }
+
+            public MemorySegment set(MemorySegment m, byte v) {
+                value(m).set(target, 0, v);
+                return m;
+            }
+
+            public MemorySegment set(MemorySegment m, byte[] v) {
+                var ms = value(m).reinterpret(v.length);
+                ms.copyFrom(MemorySegment.ofArray(v));
+                return m;
+            }
+
+            public byte[] get(MemorySegment m, long size) {
+                return value(m).reinterpret(size).toArray(target);
+            }
+
+        }
+
+        Int16 Int16 = new Int16();
+
+        final class Int16 extends Base<ValueLayout.OfShort> {
+            public Int16() {
+                super(ValueLayout.JAVA_SHORT);
+            }
+
+            public short get(MemorySegment m) {
+                return value(m).get(target, 0);
+            }
+
+            public MemorySegment set(MemorySegment m, short v) {
+                value(m).set(target, 0, v);
+                return m;
+            }
+
+            public MemorySegment set(MemorySegment m, short[] v) {
+                var ms = value(m).reinterpret(v.length);
+                ms.copyFrom(MemorySegment.ofArray(v));
+                return m;
+            }
+
+            public short[] get(MemorySegment m, long size) {
+                return value(m).reinterpret(size).toArray(target);
+            }
+        }
+
+        Int32 Int32 = new Int32();
+
+        final class Int32 extends Base<ValueLayout.OfInt> {
+            public Int32() {
+                super(ValueLayout.JAVA_INT);
+            }
+
+            public int get(MemorySegment m) {
+                return value(m).get(target, 0);
+            }
+
+            public MemorySegment set(MemorySegment m, int v) {
+                value(m).set(target, 0, v);
+                return m;
+            }
+
+            public MemorySegment set(MemorySegment m, int[] v) {
+                var ms = value(m).reinterpret(v.length);
+                ms.copyFrom(MemorySegment.ofArray(v));
+                return m;
+            }
+
+            public int[] get(MemorySegment m, long size) {
+                return value(m).reinterpret(size).toArray(target);
+            }
+        }
+
+        Int64 Int64 = new Int64();
+
+        final class Int64 extends Base<ValueLayout.OfLong> {
+            public Int64() {
+                super(ValueLayout.JAVA_LONG);
+            }
+
+            public long get(MemorySegment m) {
+                return value(m).get(target, 0);
+            }
+
+            public MemorySegment set(MemorySegment m, long v) {
+                value(m).set(target, 0, v);
+                return m;
+            }
+
+            public MemorySegment set(MemorySegment m, long[] v) {
+                var ms = value(m).reinterpret(v.length);
+                ms.copyFrom(MemorySegment.ofArray(v));
+                return m;
+            }
+
+            public long[] get(MemorySegment m, long size) {
+                return value(m).reinterpret(size).toArray(target);
+            }
+        }
+
+        Float32 Float32 = new Float32();
+
+        final class Float32 extends Base<ValueLayout.OfFloat> {
+            public Float32() {
+                super(ValueLayout.JAVA_FLOAT);
+            }
+
+            public float get(MemorySegment m) {
+                return value(m).get(target, 0);
+            }
+
+            public MemorySegment set(MemorySegment m, float v) {
+                value(m).set(target, 0, v);
+                return m;
+            }
+
+            public MemorySegment set(MemorySegment m, float[] v) {
+                var ms = value(m).reinterpret(v.length);
+                ms.copyFrom(MemorySegment.ofArray(v));
+                return m;
+            }
+
+            public float[] get(MemorySegment m, long size) {
+                return value(m).reinterpret(size).toArray(target);
+            }
+        }
+
+        Float64 Float64 = new Float64();
+
+        final class Float64 extends Base<ValueLayout.OfDouble> {
+            public Float64() {
+                super(ValueLayout.JAVA_DOUBLE);
+            }
+
+            public double get(MemorySegment m) {
+                return value(m).get(target, 0);
+            }
+
+            public MemorySegment set(MemorySegment m, double v) {
+                value(m).set(target, 0, v);
+                return m;
+            }
+
+            public MemorySegment set(MemorySegment m, double[] v) {
+                var ms = value(m).reinterpret(v.length);
+                ms.copyFrom(MemorySegment.ofArray(v));
+                return m;
+            }
+
+            public double[] get(MemorySegment m, long size) {
+                return value(m).reinterpret(size).toArray(target);
+            }
+        }
+
     }
 
     MemorySegment NULL = MemorySegment.NULL;
@@ -158,7 +421,7 @@ public interface FFI {
     Primitive<OfDouble> C_DOUBLE = FFI.FLOAT64;
     Primitive<OfDouble> C_LONG_DOUBLE = FFI.FLOAT64;
     Primitive<OfLong> C_SIZE_T = FFI.INT64;
-    Primitive<AddressLayout> C_POINTER = FFI.POINTER;
+    Primitive.pointer<SequenceLayout> C_POINTER = FFI.POINTER;
     Primitive<AddressLayout> C_STRING = FFI.STRING;
     //endregion
     //region common type
@@ -171,13 +434,12 @@ public interface FFI {
     Primitive<OfDouble> FLOAT64 = new Primitive.entity<>(ValueLayout.JAVA_DOUBLE, double.class);
     Primitive<OfChar> RUNE = new Primitive.entity<>(ValueLayout.JAVA_CHAR, char.class);
     Primitive<OfLong> SIZE = INT64;
-    Primitive<AddressLayout> POINTER = new Primitive.entity<>(
-            ValueLayout.ADDRESS.withTargetLayout(
-                    MemoryLayout.sequenceLayout(Long.MAX_VALUE, ValueLayout.JAVA_BYTE)), void.class);
+    Primitive.pointer<SequenceLayout> POINTER = Primitive.pointer.array(ValueLayout.JAVA_BYTE, Long.MAX_VALUE);
     Primitive<AddressLayout> STRING = new Primitive.entity<>(
             ValueLayout.ADDRESS.withTargetLayout(
                     MemoryLayout.sequenceLayout(Long.MAX_VALUE, ValueLayout.JAVA_BYTE)), String.class);
     //endregion
+
     /// array type
     sealed interface Array<L extends MemoryLayout, C extends Type<L>> extends Type<SequenceLayout> {
 
@@ -189,8 +451,8 @@ public interface FFI {
             return layout(Long.MAX_VALUE);
         }
 
-        default Field<SequenceLayout> asField(String name){
-            return new Field<>(name,this);
+        default Field<SequenceLayout> asField(String name) {
+            return new Field<>(name, this);
         }
 
         record entity<L extends MemoryLayout, C extends Type<L>>(C component) implements Array<L, C> {
@@ -731,4 +993,157 @@ public interface FFI {
             record entity(MemorySegment memory) implements Float64 {}
         }
     }
+
+    ///  current OS type
+    enum OS {
+        DARWIN,
+        FREEBSD,
+        NETBSD,
+        OPENBSD,
+        DRAGONFLY,
+        LINUX,
+        SOLARIS,
+        WINDOWS,
+        AIX,
+        IBMI,
+        ZLINUX,
+        MIDNIGHTBSD,
+        UNKNOWN;
+
+        public String toString() {
+            return this.name().toLowerCase();
+        }
+
+        public static final OS CURRENT;
+
+        static {
+            CURRENT = determineOS();
+        }
+
+        static OS determineOS() {
+            var osName = System.getProperty("os.name").split(" ")[0];
+            if (!startsWithIgnoreCase(osName, "mac") && !startsWithIgnoreCase(osName, "darwin")) {
+                if (startsWithIgnoreCase(osName, "linux")) {
+                    return OS.LINUX;
+                } else if (!startsWithIgnoreCase(osName, "sunos") && !startsWithIgnoreCase(osName, "solaris")) {
+                    if (startsWithIgnoreCase(osName, "aix")) {
+                        return OS.AIX;
+                    } else if (!startsWithIgnoreCase(osName, "os400") && !startsWithIgnoreCase(osName, "os/400")) {
+                        if (startsWithIgnoreCase(osName, "openbsd")) {
+                            return OS.OPENBSD;
+                        } else if (startsWithIgnoreCase(osName, "freebsd")) {
+                            return OS.FREEBSD;
+                        } else if (startsWithIgnoreCase(osName, "dragonfly")) {
+                            return OS.DRAGONFLY;
+                        } else if (startsWithIgnoreCase(osName, "windows")) {
+                            return OS.WINDOWS;
+                        } else {
+                            return startsWithIgnoreCase(osName, "midnightbsd") ? OS.MIDNIGHTBSD : OS.UNKNOWN;
+                        }
+                    } else {
+                        return OS.IBMI;
+                    }
+                } else {
+                    return OS.SOLARIS;
+                }
+            } else {
+                return OS.DARWIN;
+            }
+        }
+
+        private static boolean startsWithIgnoreCase(String s1, String s2) {
+            return s1.startsWith(s2) || s1.toUpperCase().startsWith(s2.toUpperCase()) || s1.toLowerCase()
+                                                                                           .startsWith(
+                                                                                                   s2.toLowerCase());
+        }
+    }
+
+    ///  current OS CPU arch
+    enum CPU {
+        I386,
+        X86_64,
+        PPC,
+        PPC64,
+        PPC64LE,
+        SPARC,
+        SPARCV9,
+        S390X,
+        MIPS32,
+        ARM,
+        AARCH64,
+        MIPS64EL,
+        LOONGARCH64,
+        RISCV64,
+        UNKNOWN;
+
+        public String toString() {
+            return this.name().toLowerCase();
+        }
+
+        public static final CPU CURRENT;
+
+        static {
+            CURRENT = determineCPU();
+        }
+
+        static CPU determineCPU() {
+            String archString = System.getProperty("os.arch");
+            if (!"x86".equalsIgnoreCase(archString)
+                    && !"i386".equalsIgnoreCase(archString)
+                    && !"i86pc".equalsIgnoreCase(archString)
+                    && !"i686".equalsIgnoreCase(archString)) {
+                if (!"x86_64".equalsIgnoreCase(archString) && !"amd64".equalsIgnoreCase(archString)) {
+                    if (!"ppc".equalsIgnoreCase(archString) && !"powerpc".equalsIgnoreCase(archString)) {
+                        if (!"ppc64".equalsIgnoreCase(archString) && !"powerpc64".equalsIgnoreCase(archString)) {
+                            if (!"ppc64le".equalsIgnoreCase(archString) && !"powerpc64le".equalsIgnoreCase(
+                                    archString)) {
+                                if (!"s390".equalsIgnoreCase(archString) && !"s390x".equalsIgnoreCase(archString)) {
+                                    if ("aarch64".equalsIgnoreCase(archString)) {
+                                        return CPU.AARCH64;
+                                    } else if (!"arm".equalsIgnoreCase(archString) && !"armv7l".equalsIgnoreCase(
+                                            archString)) {
+                                        if (!"mips64".equalsIgnoreCase(archString) && !"mips64el".equalsIgnoreCase(
+                                                archString)) {
+                                            if ("loongarch64".equalsIgnoreCase(archString)) {
+                                                return CPU.LOONGARCH64;
+                                            } else if ("riscv64".equalsIgnoreCase(archString)) {
+                                                return CPU.RISCV64;
+                                            } else {
+                                                for (CPU cpu : CPU.values()) {
+                                                    if (cpu.name().equalsIgnoreCase(archString)) {
+                                                        return cpu;
+                                                    }
+                                                }
+
+                                                return CPU.UNKNOWN;
+                                            }
+                                        } else {
+                                            return CPU.MIPS64EL;
+                                        }
+                                    } else {
+                                        return CPU.ARM;
+                                    }
+                                } else {
+                                    return CPU.S390X;
+                                }
+                            } else {
+                                return CPU.PPC64LE;
+                            }
+                        } else {
+                            return "little".equals(
+                                    System.getProperty("sun.cpu.endian")) ? CPU.PPC64LE : CPU.PPC64;
+                        }
+                    } else {
+                        return OS.IBMI.equals(OS.CURRENT) ? CPU.PPC64 : CPU.PPC;
+                    }
+                } else {
+                    return CPU.X86_64;
+                }
+            } else {
+                return CPU.I386;
+            }
+        }
+    }
+
+
 }
