@@ -21,7 +21,19 @@ import java.util.function.Supplier;
  * @since 2025-09-24
  */
 public interface Layouts {
-    MemorySegment NULL=MemorySegment.NULL;
+    ValueLayout.OfByte BYTE = ValueLayout.JAVA_BYTE;
+    ValueLayout.OfShort SHORT = ValueLayout.JAVA_SHORT;
+    ValueLayout.OfInt INT = ValueLayout.JAVA_INT;
+    ValueLayout.OfLong LONG = ValueLayout.JAVA_LONG;
+    ValueLayout.OfChar CHARACTER = ValueLayout.JAVA_CHAR;
+    ValueLayout.OfFloat FLOAT = ValueLayout.JAVA_FLOAT;
+    ValueLayout.OfDouble DOUBLE = ValueLayout.JAVA_DOUBLE;
+    ValueLayout.OfBoolean BOOLEAN = ValueLayout.JAVA_BOOLEAN;
+    AddressLayout Address = ValueLayout.ADDRESS;
+
+
+    MemorySegment NULL = MemorySegment.NULL;
+
     interface LayoutFunctor<T extends MemoryLayout> extends Function<Layouts, T> {
 
 
@@ -72,8 +84,7 @@ public interface Layouts {
     }
 
 
-
-    LayoutFunctor<ValueLayout.OfByte> BYTE = Layouts::int8;
+    LayoutFunctor<ValueLayout.OfByte> INT8 = Layouts::int8;
     LayoutFunctor<ValueLayout.OfShort> INT16 = Layouts::int16;
     LayoutFunctor<ValueLayout.OfInt> INT32 = Layouts::int32;
     LayoutFunctor<ValueLayout.OfLong> INT64 = Layouts::int64;
@@ -374,51 +385,318 @@ public interface Layouts {
         /// create a stub, which is an address point to the instance java method instance.
         public MemorySegment stub(Arena arena, Linker linker, MethodHandles.Lookup lookup,
                                   Object owner, String name, MethodType type,
-                                  Linker.Option... options) throws NoSuchMethodException, IllegalAccessException {
-            return linker.upcallStub(lookup.bind(owner, name, type), descriptor(), arena, options);
+                                  Linker.Option... options) {
+            return sneaky((ThrowGet<? extends MemorySegment>) () -> linker.upcallStub(lookup.bind(owner, name, type),
+                                                                                      descriptor(), arena, options));
         }
 
         public MemorySegment stub(Arena arena, Linker linker, MethodHandles.Lookup lookup,
                                   Object owner, String name, Class<?> retType,
-                                  Class<?>... arguments) throws NoSuchMethodException, IllegalAccessException {
-            return linker.upcallStub(lookup.bind(owner, name, MethodType.methodType(retType, arguments)), descriptor(),
-                                     arena);
+                                  Class<?>... arguments) {
+            return sneaky((ThrowGet<? extends MemorySegment>) () -> linker.upcallStub(
+                    lookup.bind(owner, name, MethodType.methodType(retType, arguments)), descriptor(),
+                    arena));
         }
 
         /// create a stub, which is an address point to the class static method.
         public MemorySegment stub(Arena arena, Linker linker, MethodHandles.Lookup lookup,
                                   Class<?> owner, String name, MethodType type,
-                                  Linker.Option... options) throws NoSuchMethodException, IllegalAccessException {
-            return linker.upcallStub(lookup.findStatic(owner, name, type), descriptor(), arena, options);
+                                  Linker.Option... options) {
+            return sneaky(
+                    (ThrowGet<? extends MemorySegment>) () -> linker.upcallStub(lookup.findStatic(owner, name, type),
+                                                                                descriptor(), arena, options));
         }
 
         /// create a stub, which is an address point to the class static method.
         public MemorySegment stub(Arena arena, Linker linker, MethodHandles.Lookup lookup,
                                   Class<?> owner, String name, Class<?> retType,
-                                  Class<?>... arguments) throws NoSuchMethodException, IllegalAccessException {
-            return linker.upcallStub(lookup.findStatic(owner, name, MethodType.methodType(retType, arguments)),
-                                     descriptor(), arena);
+                                  Class<?>... arguments) {
+            return sneaky((ThrowGet<? extends MemorySegment>) () -> linker.upcallStub(
+                    lookup.findStatic(owner, name, MethodType.methodType(retType, arguments)),
+                    descriptor(), arena));
         }
 
         /// create a stub, which is an address point to the class constructor method.
         public MemorySegment stubConstructor(Arena arena, Linker linker, MethodHandles.Lookup lookup,
                                              Class<?> owner, MethodType type,
-                                             Linker.Option... options) throws NoSuchMethodException,
-                IllegalAccessException {
-            return linker.upcallStub(lookup.findConstructor(owner, type), descriptor(), arena, options);
+                                             Linker.Option... options) {
+            return sneaky(
+                    (ThrowGet<? extends MemorySegment>) () -> linker.upcallStub(lookup.findConstructor(owner, type),
+                                                                                descriptor(), arena, options));
         }
 
         /// create a stub, which is an address point to the class constructor method.
         public MemorySegment stubConstructor(Arena arena, Linker linker, MethodHandles.Lookup lookup,
                                              Class<?> owner,
-                                             Class<?>... arguments) throws NoSuchMethodException,
-                IllegalAccessException {
-            return linker.upcallStub(lookup.findConstructor(owner, MethodType.methodType(owner, arguments)),
-                                     descriptor(), arena);
+                                             Class<?>... arguments) {
+            return sneaky((ThrowGet<? extends MemorySegment>) () -> linker.upcallStub(
+                    lookup.findConstructor(owner, MethodType.methodType(owner, arguments)),
+                    descriptor(), arena));
         }
     }
 
     static Func func() {
         return new Func();
+    }
+
+    @SuppressWarnings("unchecked")
+    static <E extends Throwable> void sneakyThrow(Throwable e) throws E {
+        throw (E) e;
+    }
+
+    interface ThrowMapper<I, O> {
+        O apply(I i) throws Throwable;
+    }
+
+    interface ThrowApply<T> {
+        T apply(Arena arena) throws Throwable;
+
+        default <R> ThrowApply<R> then(ThrowMapper<T, R> m) {
+            return a -> m.apply(apply(a));
+        }
+    }
+
+    static <T> T sneaky(ThrowApply<T> action) {
+        try (var arena = Arena.ofConfined()) {
+            return action.apply(arena);
+        } catch (Throwable e) {
+            sneakyThrow(e);
+        }
+        throw new IllegalStateException("should not reach");
+    }
+
+    interface ByteThrowApply {
+        byte apply(Arena arena) throws Throwable;
+    }
+
+    static byte sneakyByte(ByteThrowApply act) {
+        try (var arena = Arena.ofConfined()) {
+            return act.apply(arena);
+        } catch (Throwable e) {
+            sneakyThrow(e);
+        }
+        throw new IllegalStateException("should not reach");
+    }
+
+    interface ShortThrowApply {
+        short apply(Arena arena) throws Throwable;
+
+    }
+
+    static short sneakyShort(ShortThrowApply act) {
+        try (var arena = Arena.ofConfined()) {
+            return act.apply(arena);
+        } catch (Throwable e) {
+            sneakyThrow(e);
+        }
+        throw new IllegalStateException("should not reach");
+    }
+
+    interface IntThrowApply {
+        int apply(Arena arena) throws Throwable;
+    }
+
+    static int sneakyInt(IntThrowApply act) {
+        try (var arena = Arena.ofConfined()) {
+            return act.apply(arena);
+        } catch (Throwable e) {
+            sneakyThrow(e);
+        }
+        throw new IllegalStateException("should not reach");
+    }
+
+    interface LongThrowApply {
+        long apply(Arena arena) throws Throwable;
+
+    }
+
+    static long sneakyLong(LongThrowApply act) {
+        try (var arena = Arena.ofConfined()) {
+            return act.apply(arena);
+        } catch (Throwable e) {
+            sneakyThrow(e);
+        }
+        throw new IllegalStateException("should not reach");
+    }
+
+    interface FloatThrowApply {
+        float apply(Arena arena) throws Throwable;
+
+    }
+
+    static float sneakyFloat(FloatThrowApply act) {
+        try (var arena = Arena.ofConfined()) {
+            return act.apply(arena);
+        } catch (Throwable e) {
+            sneakyThrow(e);
+        }
+        throw new IllegalStateException("should not reach");
+    }
+
+    interface DoubleThrowApply {
+        double apply(Arena arena) throws Throwable;
+
+    }
+
+    static double sneakyDouble(DoubleThrowApply act) {
+        try (var arena = Arena.ofConfined()) {
+            return act.apply(arena);
+        } catch (Throwable e) {
+            sneakyThrow(e);
+        }
+        throw new IllegalStateException("should not reach");
+    }
+
+    interface BooleanThrowApply {
+        boolean apply(Arena arena) throws Throwable;
+
+    }
+
+    static boolean sneakyBoolean(BooleanThrowApply act) {
+        try (var arena = Arena.ofConfined()) {
+            return act.apply(arena);
+        } catch (Throwable e) {
+            sneakyThrow(e);
+        }
+        throw new IllegalStateException("should not reach");
+    }
+
+    interface VoidThrowApply {
+        void apply(Arena arena) throws Throwable;
+    }
+
+    static void sneakyVoid(VoidThrowApply act) {
+        try (var arena = Arena.ofConfined()) {
+            act.apply(arena);
+            return;
+        } catch (Throwable e) {
+            sneakyThrow(e);
+        }
+        throw new IllegalStateException("should not reach");
+    }
+
+    interface ThrowGet<T> {
+        T get() throws Throwable;
+
+        default <R> ThrowGet<R> then(ThrowMapper<T, R> m) {
+            return () -> m.apply(get());
+        }
+    }
+
+    static <T> T sneaky(ThrowGet<T> act) {
+        try {
+            return act.get();
+        } catch (Throwable e) {
+            sneakyThrow(e);
+        }
+        throw new IllegalStateException("should not reach");
+    }
+
+    interface ByteThrowGet {
+        byte get() throws Throwable;
+    }
+
+    static byte sneakyByte(ByteThrowGet act) {
+        try {
+            return act.get();
+        } catch (Throwable e) {
+            sneakyThrow(e);
+        }
+        throw new IllegalStateException("should not reach");
+    }
+
+    interface ShortThrowGet {
+        short get() throws Throwable;
+
+    }
+
+    static short sneakyShort(ShortThrowGet act) {
+        try {
+            return act.get();
+        } catch (Throwable e) {
+            sneakyThrow(e);
+        }
+        throw new IllegalStateException("should not reach");
+    }
+
+    interface IntThrowGet {
+        int get() throws Throwable;
+
+    }
+
+    static int sneakyInt(IntThrowGet act) {
+        try {
+            return act.get();
+        } catch (Throwable e) {
+            sneakyThrow(e);
+        }
+        throw new IllegalStateException("should not reach");
+    }
+
+    interface LongThrowGet {
+        long get() throws Throwable;
+    }
+
+    static long sneakyLong(LongThrowGet act) {
+        try {
+            return act.get();
+        } catch (Throwable e) {
+            sneakyThrow(e);
+        }
+        throw new IllegalStateException("should not reach");
+    }
+
+    interface FloatThrowGet {
+        float get() throws Throwable;
+    }
+
+    static float sneakyFloat(FloatThrowGet act) {
+        try {
+            return act.get();
+        } catch (Throwable e) {
+            sneakyThrow(e);
+        }
+        throw new IllegalStateException("should not reach");
+    }
+
+    interface DoubleThrowGet {
+        double get() throws Throwable;
+    }
+
+    static double sneakyDouble(DoubleThrowGet act) {
+        try {
+            return act.get();
+        } catch (Throwable e) {
+            sneakyThrow(e);
+        }
+        throw new IllegalStateException("should not reach");
+    }
+
+    interface BooleanThrowGet {
+        boolean get() throws Throwable;
+    }
+
+    static boolean sneakyBoolean(BooleanThrowGet act) {
+        try {
+            return act.get();
+        } catch (Throwable e) {
+            sneakyThrow(e);
+        }
+        throw new IllegalStateException("should not reach");
+    }
+
+    interface VoidThrowGet {
+        void get() throws Throwable;
+
+    }
+
+    static void sneakyVoid(VoidThrowGet act) {
+        try {
+            act.get();
+            return;
+        } catch (Throwable e) {
+            sneakyThrow(e);
+        }
+        throw new IllegalStateException("should not reach");
     }
 }
